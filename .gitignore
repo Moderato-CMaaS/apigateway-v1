@@ -17,14 +17,11 @@ userportal/.vercel
 userportal/.netlify
 
 # Environment variables
-.env
-.env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
 # IDE and Editor files
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -198,3 +195,4 @@ build/Release/
 .svelte-kit
 
 # End of https://www.gitignore.io/api/node,java,ballerina
+config.bat
