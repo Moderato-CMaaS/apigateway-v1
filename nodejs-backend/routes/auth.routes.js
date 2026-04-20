@@ -22,7 +22,7 @@ const { requireAuth } = require('../middleware');
 const config = require('../config');
 
 // Register new user
-router.post('/register', (req, res) => {
+router.post('/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
     
@@ -40,37 +40,37 @@ router.post('/register', (req, res) => {
     }
     
     if (!isValidPassword(password)) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+      return res.status(400).json({ error: 'Password must be at least 8 characters, with uppercase, lowercase, and numbers' });
     }
     
     // Check if user already exists
-    const existingUserByUsername = getUserByUsername(username);
+    const existingUserByUsername = await getUserByUsername(username);
     if (existingUserByUsername) {
       return res.status(409).json({ error: 'Username already exists' });
     }
     
-    const existingUserByEmail = getUserByEmail(email);
+    const existingUserByEmail = await getUserByEmail(email);
     if (existingUserByEmail) {
       return res.status(409).json({ error: 'Email already exists' });
     }
     
     // Create user
     const passwordHash = hashPassword(password);
-    const newUser = createUser(username, email, passwordHash);
+    const newUser = await createUser(username, email, passwordHash);
     
-    console.log('User registered successfully:', username);
+    console.log('✅ User registered successfully:', username);
     res.status(201).json({
       message: 'User registered successfully',
       user: toUserResponse(newUser)
     });
   } catch (error) {
-    console.error('Failed to create user:', error);
+    console.error('❌ Failed to create user:', error);
     res.status(500).json({ error: 'Failed to create user' });
   }
 });
 
 // Login user
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     
@@ -80,7 +80,7 @@ router.post('/login', (req, res) => {
     }
     
     // Find user
-    const user = getUserByUsername(username);
+    const user = await getUserByUsername(username);
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -98,10 +98,10 @@ router.post('/login', (req, res) => {
     const tokenHash = hashToken(token);
     
     // Store token in database
-    const expiresAt = new Date(Date.now() + config.jwtExpiryTime * 1000).toISOString();
-    storeJWTToken(user.id, tokenHash, expiresAt);
+    const expiresAt = new Date(Date.now() + config.jwtExpiryTime * 1000);
+    await storeJWTToken(user.id, tokenHash, expiresAt);
     
-    console.log('User logged in successfully:', username);
+    console.log('✅ User logged in successfully:', username);
     res.json({
       token,
       message: 'Login successful',
@@ -109,16 +109,16 @@ router.post('/login', (req, res) => {
       expiresIn: config.jwtExpiryTime
     });
   } catch (error) {
-    console.error('Failed to login:', error);
+    console.error('❌ Failed to login:', error);
     res.status(500).json({ error: 'Failed to login' });
   }
 });
 
 // Get user profile
-router.get('/profile', requireAuth, (req, res) => {
+router.get('/profile', requireAuth, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const user = getUserById(userId);
+    const user = await getUserById(userId);
     
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
@@ -129,24 +129,24 @@ router.get('/profile', requireAuth, (req, res) => {
       message: 'Profile retrieved successfully'
     });
   } catch (error) {
-    console.error('Failed to get profile:', error);
+    console.error('❌ Failed to get profile:', error);
     res.status(500).json({ error: 'Failed to get profile' });
   }
 });
 
 // Logout user
-router.post('/logout', (req, res) => {
+router.post('/logout', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
       const tokenHash = hashToken(token);
-      revokeToken(tokenHash);
+      await revokeToken(tokenHash);
     }
     
     res.json({ message: 'Logout successful' });
   } catch (error) {
-    console.error('Failed to logout:', error);
+    console.error('❌ Failed to logout:', error);
     res.json({ message: 'Logout successful' });
   }
 });

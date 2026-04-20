@@ -1,180 +1,196 @@
-// Database connection and operations
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
-const config = require('./config');
-
-// Ensure database directory exists
-const dbDir = path.dirname(config.dbPath);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
+// MongoDB Connection and Operations
+const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
+const User = require('./models/User');
+const JWTToken = require('./models/JWTToken');
+const ApiKey = require('./models/ApiKey');
 
 // Initialize database connection
-const db = new Database(config.dbPath);
-db.pragma('foreign_keys = ON');
-
-// Initialize database schema
-function initializeDatabase() {
-  console.log('Initializing database schema...');
-  
-  // Create users table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      is_active BOOLEAN DEFAULT 1
-    )
-  `);
-  
-  // Create jwt_tokens table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS jwt_tokens (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      token_hash TEXT NOT NULL,
-      expires_at DATETIME NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      is_revoked BOOLEAN DEFAULT 0,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-  `);
-  
-  // Create api_keys table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS api_keys (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      key_hash TEXT NOT NULL,
-      description TEXT,
-      rules TEXT,
-      status TEXT DEFAULT 'active',
-      usage_count INTEGER DEFAULT 0,
-      monthly_quota INTEGER DEFAULT 100,
-      current_month_usage INTEGER DEFAULT 0,
-      quota_reset_date TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-  `);
-  
-  // Create indexes for better performance
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_jwt_tokens_user_id ON jwt_tokens(user_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_jwt_tokens_token_hash ON jwt_tokens(token_hash)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_jwt_tokens_expires_at ON jwt_tokens(expires_at)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)`);
-  
-  console.log('Database schema initialized successfully!');
+async function initializeDatabase() {
+  try {
+    const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/userportal';
+    
+    await mongoose.connect(mongoUri, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+    
+    console.log('✅ MongoDB connected successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to connect to MongoDB:', error);
+    throw error;
+  }
 }
 
 // ===== USER OPERATIONS =====
 
-function createUser(username, email, passwordHash) {
-  const { v4: uuidv4 } = require('uuid');
+async function createUser(username, email, passwordHash) {
   const userId = uuidv4();
   
-  const stmt = db.prepare(`
-    INSERT INTO users (id, username, email, password_hash, is_active)
-    VALUES (?, ?, ?, ?, 1)
-  `);
+  const user = new User({
+    id: userId,
+    username,
+    email,
+    password_hash: passwordHash,
+    is_active: true
+  });
   
-  const result = stmt.run(userId, username, email, passwordHash);
-  
-  if (result.changes === 1) {
-    return getUserById(userId);
-  }
-  
-  throw new Error('Failed to create user');
+  return await user.save();
 }
 
 function getUserByUsername(username) {
-  const stmt = db.prepare(`
-    SELECT id, username, email, password_hash, created_at, updated_at, is_active
-    FROM users WHERE username = ? AND is_active = 1
-  `);
-  
-  return stmt.get(username);
+  return User.findOne({ username, is_active: true });
 }
 
 function getUserByEmail(email) {
-  const stmt = db.prepare(`
-    SELECT id, username, email, password_hash, created_at, updated_at, is_active
-    FROM users WHERE email = ? AND is_active = 1
-  `);
-  
-  return stmt.get(email);
+  return User.findOne({ email, is_active: true });
 }
 
 function getUserById(userId) {
-  const stmt = db.prepare(`
-    SELECT id, username, email, password_hash, created_at, updated_at, is_active
-    FROM users WHERE id = ? AND is_active = 1
-  `);
-  
-  return stmt.get(userId);
+  return User.findOne({ id: userId, is_active: true });
 }
 
-// ===== TOKEN OPERATIONS =====
+// ===== JWT TOKEN OPERATIONS =====
 
-function storeJWTToken(userId, tokenHash, expiresAt) {
-  const { v4: uuidv4 } = require('uuid');
+async function storeJWTToken(userId, tokenHash, expiresAt) {
   const tokenId = uuidv4();
   
-  const stmt = db.prepare(`
-    INSERT INTO jwt_tokens (id, user_id, token_hash, expires_at, is_revoked)
-    VALUES (?, ?, ?, ?, 0)
-  `);
+  const token = new JWTToken({
+    id: tokenId,
+    user_id: userId,
+    token_hash: tokenHash,
+    expires_at: expiresAt,
+    is_revoked: false
+  });
   
-  const result = stmt.run(tokenId, userId, tokenHash, expiresAt);
-  
-  if (result.changes === 1) {
-    return tokenId;
-  }
-  
-  throw new Error('Failed to store JWT token');
+  return await token.save();
 }
 
 function isTokenValid(tokenHash) {
-  const stmt = db.prepare(`
-    SELECT id FROM jwt_tokens 
-    WHERE token_hash = ? 
-    AND is_revoked = 0 
-    AND expires_at > datetime('now')
-  `);
-  
-  const result = stmt.get(tokenHash);
-  return result !== undefined;
+  return JWTToken.findOne({
+    token_hash: tokenHash,
+    is_revoked: false,
+    expires_at: { $gt: new Date() }
+  });
 }
 
-function revokeToken(tokenHash) {
-  const stmt = db.prepare(`
-    UPDATE jwt_tokens SET is_revoked = 1
-    WHERE token_hash = ?
-  `);
+async function revokeToken(tokenHash) {
+  const result = await JWTToken.updateOne(
+    { token_hash: tokenHash },
+    { is_revoked: true }
+  );
+  return result.modifiedCount > 0;
+}
+
+// ===== API KEY OPERATIONS =====
+
+async function createApiKey(userId, name, description, rules, quotaResetDate) {
+  const keyId = uuidv4();
   
-  const result = stmt.run(tokenHash);
-  return result.changes > 0;
+  const apiKey = new ApiKey({
+    id: keyId,
+    user_id: userId,
+    name,
+    description,
+    rules: Array.isArray(rules) ? rules : [rules],
+    quota_reset_date: quotaResetDate
+  });
+  
+  return await apiKey.save();
+}
+
+function getApiKeyById(keyId) {
+  return ApiKey.findOne({ id: keyId });
+}
+
+function getApiKeysByUserId(userId) {
+  return ApiKey.find({
+    user_id: userId,
+    status: { $ne: 'revoked' }
+  }).sort({ created_at: -1 });
+}
+
+function getApiKeyByHash(keyHash) {
+  return ApiKey.findOne({
+    key_hash: keyHash,
+    status: 'active'
+  });
+}
+
+async function updateApiKeyStatus(keyId, status) {
+  return await ApiKey.updateOne(
+    { id: keyId },
+    { 
+      status,
+      updated_at: new Date()
+    }
+  );
+}
+
+async function updateApiKeyRules(keyId, rules) {
+  return await ApiKey.updateOne(
+    { id: keyId },
+    { 
+      rules: Array.isArray(rules) ? rules : [rules],
+      updated_at: new Date()
+    }
+  );
+}
+
+async function deleteApiKey(keyId) {
+  return await ApiKey.deleteOne({ id: keyId });
+}
+
+function getApiKeyCountForUser(userId) {
+  return ApiKey.countDocuments({
+    user_id: userId,
+    status: { $ne: 'revoked' }
+  });
+}
+
+async function incrementApiKeyUsage(keyId) {
+  return await ApiKey.updateOne(
+    { id: keyId },
+    { 
+      $inc: { 
+        usage_count: 1,
+        current_month_usage: 1
+      }
+    }
+  );
+}
+
+async function updateApiKeyUsage(keyId, newUsage) {
+  return await ApiKey.updateOne(
+    { id: keyId },
+    { 
+      current_month_usage: newUsage,
+      updated_at: new Date()
+    }
+  );
 }
 
 module.exports = {
-  db,
   initializeDatabase,
+  // User operations
   createUser,
   getUserByUsername,
   getUserByEmail,
   getUserById,
+  // JWT operations
   storeJWTToken,
   isTokenValid,
-  revokeToken
+  revokeToken,
+  // API Key operations
+  createApiKey,
+  getApiKeyById,
+  getApiKeysByUserId,
+  getApiKeyByHash,
+  updateApiKeyStatus,
+  updateApiKeyRules,
+  deleteApiKey,
+  getApiKeyCountForUser,
+  incrementApiKeyUsage,
+  updateApiKeyUsage
 };

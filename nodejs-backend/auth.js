@@ -1,8 +1,8 @@
 // Authentication utilities and token management
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const config = require('./config');
-const { storeJWTToken, isTokenValid } = require('./database');
 
 // Password hashing
 function hashPassword(password) {
@@ -13,56 +13,32 @@ function checkPassword(password, hash) {
   return bcrypt.compareSync(password, hash);
 }
 
-// Token generation and validation
+// Token generation using standard JWT
 function generateToken(user) {
-  const currentTime = Math.floor(Date.now() / 1000);
-  const expiryTime = currentTime + config.jwtExpiryTime;
+  const payload = {
+    userId: user.id,
+    username: user.username,
+    email: user.email
+  };
   
-  // Create a simple token with user info and expiry
-  const tokenData = `${user.id}|${user.username}|${user.email}|${expiryTime}`;
-  const signature = crypto
-    .createHash('sha256')
-    .update(tokenData + config.jwtSecret)
-    .digest('hex');
-  
-  return `${tokenData}|${signature}`;
+  return jwt.sign(payload, config.jwtSecret, {
+    expiresIn: config.jwtExpiryTime,
+    issuer: config.jwtIssuer,
+    audience: config.jwtAudience
+  });
 }
 
+// Token validation using standard JWT
 function validateToken(token) {
-  const parts = token.split('|');
-  if (parts.length !== 5) {
-    throw new Error('Invalid token format');
+  try {
+    const payload = jwt.verify(token, config.jwtSecret, {
+      issuer: config.jwtIssuer,
+      audience: config.jwtAudience
+    });
+    return payload;
+  } catch (error) {
+    throw new Error('Invalid or expired token');
   }
-  
-  const [userId, username, email, expStr, providedSignature] = parts;
-  
-  // Reconstruct token data for signature verification
-  const tokenData = `${userId}|${username}|${email}|${expStr}`;
-  const expectedSignature = crypto
-    .createHash('sha256')
-    .update(tokenData + config.jwtSecret)
-    .digest('hex');
-  
-  if (expectedSignature !== providedSignature) {
-    throw new Error('Invalid token signature');
-  }
-  
-  // Check expiry
-  const exp = parseInt(expStr);
-  const currentTime = Math.floor(Date.now() / 1000);
-  if (exp < currentTime) {
-    throw new Error('Token expired');
-  }
-  
-  // Return payload
-  return {
-    userId,
-    username,
-    email,
-    exp,
-    iss: config.jwtIssuer,
-    aud: config.jwtAudience
-  };
 }
 
 // Helper to extract user ID from token payload
@@ -73,11 +49,48 @@ function extractUserId(payload) {
   return payload.userId;
 }
 
+// Hash token for storage
+function hashToken(token) {
+  return crypto
+    .createHash('sha256')
+    .update(token + config.jwtSecret)
+    .digest('hex');
+}
+
 // Validation utilities
 function isValidEmail(email) {
   const emailPattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
   return emailPattern.test(email);
 }
+
+function isValidPassword(password) {
+  // At least 8 characters, 1 uppercase, 1 lowercase, 1 number
+  const passwordPattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+  return passwordPattern.test(password);
+}
+
+// Convert user to response format (remove sensitive fields)
+function toUserResponse(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    created_at: user.created_at,
+    updated_at: user.updated_at
+  };
+}
+
+module.exports = {
+  hashPassword,
+  checkPassword,
+  generateToken,
+  validateToken,
+  extractUserId,
+  hashToken,
+  isValidEmail,
+  isValidPassword,
+  toUserResponse
+};
 
 function isValidPassword(password) {
   return password.length >= 8;

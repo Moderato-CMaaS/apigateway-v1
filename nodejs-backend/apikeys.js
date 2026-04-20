@@ -1,8 +1,16 @@
 // API Key management operations
 const crypto = require('crypto');
-const { v4: uuidv4 } = require('uuid');
-const { db } = require('./database');
 const config = require('./config');
+const {
+  createApiKey: createApiKeyInDb,
+  getApiKeyById,
+  getApiKeysByUserId,
+  getApiKeyCountForUser,
+  updateApiKeyStatus,
+  updateApiKeyRules,
+  deleteApiKey,
+  incrementApiKeyUsage
+} = require('./database');
 
 // API Key utility functions
 function generateApiKey() {
@@ -27,139 +35,47 @@ function calculateNextMonthResetDate() {
 
 // ===== API KEY OPERATIONS =====
 
-function createApiKey(userId, name, description, rules) {
-  // Check if user already has 3 API keys
-  const keyCount = getApiKeyCountForUser(userId);
-  if (keyCount >= 3) {
-    throw new Error('Maximum of 3 API keys allowed per user');
-  }
-  
-  const apiKeyId = uuidv4();
-  const apiKey = generateApiKey();
-  const keyHash = hashApiKey(apiKey);
-  const rulesJson = JSON.stringify(rules);
-  const quotaResetDate = calculateNextMonthResetDate();
-  
-  const stmt = db.prepare(`
-    INSERT INTO api_keys (id, user_id, name, key_hash, description, rules, status, usage_count, monthly_quota, current_month_usage, quota_reset_date)
-    VALUES (?, ?, ?, ?, ?, ?, 'active', 0, 100, 0, ?)
-  `);
-  
-  const result = stmt.run(apiKeyId, userId, name, keyHash, description, rulesJson, quotaResetDate);
-  
-  if (result.changes === 1) {
-    const createdKey = getApiKeyById(apiKeyId);
+async function createApiKey(userId, name, description, rules) {
+  try {
+    // Check if user already has 3 API keys
+    const keyCount = await getApiKeyCountForUser(userId);
+    if (keyCount >= 3) {
+      throw new Error('Maximum of 3 API keys allowed per user');
+    }
+    
+    const apiKey = generateApiKey();
+    const keyHash = hashApiKey(apiKey);
+    const quotaResetDate = calculateNextMonthResetDate();
+    
+    const createdKey = await createApiKeyInDb(userId, name, description, rules, quotaResetDate);
+    
+    // Update with key hash (after creation)
+    await createdKey.updateOne({ key_hash: keyHash });
+    
     return [createdKey, apiKey];
-  }
-  
-  throw new Error('Failed to create API key');
-}
-
-function getApiKeyCountForUser(userId) {
-  const stmt = db.prepare(`
-    SELECT COUNT(*) as count FROM api_keys 
-    WHERE user_id = ? AND status != 'revoked'
-  `);
-  
-  const result = stmt.get(userId);
-  return result ? result.count : 0;
-}
-
-function getApiKeyById(keyId) {
-  const stmt = db.prepare(`
-    SELECT id, user_id, name, key_hash, description, rules, status, usage_count, monthly_quota, current_month_usage, quota_reset_date, created_at, updated_at
-    FROM api_keys WHERE id = ?
-  `);
-  
-  const result = stmt.get(keyId);
-  
-  if (!result) {
-    throw new Error('API key not found');
-  }
-  
-  result.rules = JSON.parse(result.rules);
-  return result;
-}
-
-function getApiKeysByUserId(userId) {
-  const stmt = db.prepare(`
-    SELECT id, user_id, name, key_hash, description, rules, status, usage_count, monthly_quota, current_month_usage, quota_reset_date, created_at, updated_at
-    FROM api_keys WHERE user_id = ? AND status != 'revoked'
-    ORDER BY created_at DESC
-  `);
-  
-  const results = stmt.all(userId);
-  
-  return results.map(row => {
-    row.rules = JSON.parse(row.rules);
-    return row;
-  });
-}
-
-function validateApiKey(apiKey) {
-  const keyHash = hashApiKey(apiKey);
-  
-  const stmt = db.prepare(`
-    SELECT id, user_id, name, key_hash, description, rules, status, usage_count, monthly_quota, current_month_usage, quota_reset_date, created_at, updated_at
-    FROM api_keys WHERE key_hash = ? AND status = 'active'
-  `);
-  
-  const result = stmt.get(keyHash);
-  
-  if (!result) {
-    throw new Error('Invalid API key');
-  }
-  
-  result.rules = JSON.parse(result.rules);
-  return result;
-}
-
-function incrementApiKeyUsage(keyId) {
-  const stmt = db.prepare(`
-    UPDATE api_keys 
-    SET usage_count = usage_count + 1, current_month_usage = current_month_usage + 1, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `);
-  
-  stmt.run(keyId);
-}
-
-function updateApiKeyStatus(keyId, status) {
-  const stmt = db.prepare(`
-    UPDATE api_keys 
-    SET status = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `);
-  
-  const result = stmt.run(status, keyId);
-  return result.changes > 0;
-}
-
-function updateApiKeyRules(keyId, userId, rules) {
-  const rulesJson = JSON.stringify(rules);
-  
-  const stmt = db.prepare(`
-    UPDATE api_keys 
-    SET rules = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND user_id = ? AND status != 'revoked'
-  `);
-  
-  const result = stmt.run(rulesJson, keyId, userId);
-  
-  if (result.changes === 0) {
-    throw new Error('API key not found or access denied');
+  } catch (error) {
+    throw new Error('Failed to create API key: ' + error.message);
   }
 }
 
-function deleteApiKey(keyId, userId) {
-  const stmt = db.prepare(`
-    UPDATE api_keys 
-    SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND user_id = ?
-  `);
-  
-  const result = stmt.run(keyId, userId);
-  return result.changes > 0;
+async function validateApiKey(apiKey) {
+  try {
+    const keyHash = hashApiKey(apiKey);
+    const ApiKey = require('./models/ApiKey');
+    
+    const result = await ApiKey.findOne({
+      key_hash: keyHash,
+      status: 'active'
+    });
+    
+    if (!result) {
+      throw new Error('Invalid API key');
+    }
+    
+    return result;
+  } catch (error) {
+    throw new Error('Invalid API key: ' + error.message);
+  }
 }
 
 function toApiKeyResponse(apiKey) {
@@ -192,5 +108,6 @@ module.exports = {
   updateApiKeyStatus,
   updateApiKeyRules,
   deleteApiKey,
-  toApiKeyResponse
+  toApiKeyResponse,
+  calculateNextMonthResetDate
 };

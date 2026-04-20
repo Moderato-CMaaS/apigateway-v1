@@ -29,6 +29,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     service: 'userportal-auth',
+    database: 'mongodb',
     timestamp: new Date().toISOString()
   });
 });
@@ -48,6 +49,28 @@ app.use((err, req, res, next) => {
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
+
+// Initialize MongoDB and start server
+async function startServer() {
+  try {
+    // Connect to MongoDB
+    await initializeDatabase();
+    
+    // Fix any existing quota issues
+    await fixExistingApiKeyQuotas();
+    
+    // Start listening
+    app.listen(config.port, () => {
+      console.log(`✅ Server running on http://localhost:${config.port}`);
+      console.log(`📊 API Health: http://localhost:${config.port}/api/health`);
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
 
 // Initialize database and start server
 async function startServer() {
