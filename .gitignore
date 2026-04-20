@@ -17,8 +17,6 @@ userportal/.vercel
 userportal/.netlify
 
 # Environment variables
-.env
-.env.local
 .env.development.local
 .env.test.local
 .env.production.local
@@ -199,3 +197,5 @@ build/Release/
 
 # End of https://www.gitignore.io/api/node,java,ballerina
 config.bat
+temp_auto_push.bat
+temp_interactive_push.bat
